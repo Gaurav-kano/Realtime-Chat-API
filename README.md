@@ -3,24 +3,22 @@
 A horizontally scalable real-time chat backend with **WebSocket rooms**, **JWT auth with refresh tokens**, **cursor-based message pagination**, **Redis Pub/Sub** for multi-instance scaling, and **file/image message support** — built with Node.js, Socket.IO, MongoDB, and Redis.
 
 ---
+## 🧠 What I Learned Building This
 
-## 📸 API Demo
+**Cursor-based pagination is non-negotiable for chat**
+I initially implemented offset-based pagination (`skip: page * limit`). It worked but slowed down noticeably after 10,000 messages because MongoDB still scans all skipped documents. Switching to cursor-based pagination (`_id: { $lt: cursor }`) with a compound index on `(roomId, createdAt DESC)` brought query time from ~80ms to ~4ms on a 100k message collection. The cursor is just the `_id` of the last message — simple and stateless.
 
-![Real-time Chat Demo](docs/demo.svg)
+**JWT access + refresh token rotation**
+Short-lived access tokens (15 min) mean a stolen token expires quickly. But constantly re-logging-in is bad UX. Refresh tokens solve this — but storing them statefully in Redis (and deleting the old one on each refresh) prevents replay attacks if a refresh token is somehow leaked. The "aha" moment was realizing the refresh token must be invalidated on use, not just issued alongside a new one.
 
-> **Flow:** Register → Create Room → Connect Socket → Send Messages
+**Redis Pub/Sub for Socket.IO — understanding WHY it's needed**
+When you run a single server, socket broadcasts just work. When you deploy two instances behind a load balancer, Client A on Instance 1 sends a message, and Socket.IO tries to broadcast to Room X — but Client B is connected to Instance 2 and never gets it. Redis Pub/Sub is the message bus between instances. The `@socket.io/redis-adapter` handles this transparently — zero code changes needed to scale from 1 to N instances.
 
-```
-POST /api/auth/register        →  { accessToken, refreshToken }
-POST /api/rooms                →  { id, name, members: [] }
-WS   socket.connect(token)     →  authenticated socket
-     socket.emit('room:join')  →  joins room
-     socket.emit('msg:send')   →  broadcasts to room members
-     socket.on('msg:new')      →  receives real-time message
-GET  /api/messages/:roomId     →  paginated message history
-```
+**Typing indicators — the "debounce on the client" pattern**
+Emitting `typing:start` on every keystroke would spam the server. The correct pattern is: emit `typing:start` on the first keystroke, then `typing:stop` after 1 second of inactivity using a debounce timeout. This gives a smooth experience with a fraction of the events. I also learned NOT to persist typing events to the DB — they're ephemeral and should only travel over WebSocket.
 
-**Postman Collection:** Import `docs/postman_collection.json` — includes WebSocket test scripts via Socket.IO client.
+**Mongoose indexes matter from day one**
+Adding `messageSchema.index({ roomId: 1, createdAt: -1 })` after the fact required an index build on a live collection — painful. The lesson: think about query patterns before writing the first document. Every `find()` with a filter field should have an index.
 
 ---
 
@@ -348,28 +346,6 @@ socket.on("user:online", ({ userId }) => {
 
 ---
 
-## 🧪 Running Tests
-
-```bash
-npm test
-
-# Example output:
-# PASS  tests/auth.test.js
-#   Auth Routes
-#     ✓ should register a new user (89ms)
-#     ✓ should reject duplicate email (23ms)
-#     ✓ should return 401 on wrong password (18ms)
-#     ✓ should refresh token and invalidate old one (45ms)
-#
-# PASS  tests/messages.test.js
-#   Message Service
-#     ✓ should paginate with cursor correctly (31ms)
-#     ✓ nextCursor is null on last page (12ms)
-#     ✓ soft-deleted messages excluded from history (9ms)
-```
-
----
-
 ## 🗂️ Project Structure
 
 ```
@@ -402,37 +378,5 @@ realtime-chat-api/
 └── README.md
 ```
 
----
 
-## 🧠 What I Learned Building This
 
-**Cursor-based pagination is non-negotiable for chat**
-I initially implemented offset-based pagination (`skip: page * limit`). It worked but slowed down noticeably after 10,000 messages because MongoDB still scans all skipped documents. Switching to cursor-based pagination (`_id: { $lt: cursor }`) with a compound index on `(roomId, createdAt DESC)` brought query time from ~80ms to ~4ms on a 100k message collection. The cursor is just the `_id` of the last message — simple and stateless.
-
-**JWT access + refresh token rotation**
-Short-lived access tokens (15 min) mean a stolen token expires quickly. But constantly re-logging-in is bad UX. Refresh tokens solve this — but storing them statefully in Redis (and deleting the old one on each refresh) prevents replay attacks if a refresh token is somehow leaked. The "aha" moment was realizing the refresh token must be invalidated on use, not just issued alongside a new one.
-
-**Redis Pub/Sub for Socket.IO — understanding WHY it's needed**
-When you run a single server, socket broadcasts just work. When you deploy two instances behind a load balancer, Client A on Instance 1 sends a message, and Socket.IO tries to broadcast to Room X — but Client B is connected to Instance 2 and never gets it. Redis Pub/Sub is the message bus between instances. The `@socket.io/redis-adapter` handles this transparently — zero code changes needed to scale from 1 to N instances.
-
-**Typing indicators — the "debounce on the client" pattern**
-Emitting `typing:start` on every keystroke would spam the server. The correct pattern is: emit `typing:start` on the first keystroke, then `typing:stop` after 1 second of inactivity using a debounce timeout. This gives a smooth experience with a fraction of the events. I also learned NOT to persist typing events to the DB — they're ephemeral and should only travel over WebSocket.
-
-**Mongoose indexes matter from day one**
-Adding `messageSchema.index({ roomId: 1, createdAt: -1 })` after the fact required an index build on a live collection — painful. The lesson: think about query patterns before writing the first document. Every `find()` with a filter field should have an index.
-
----
-
-## 🚀 Possible Extensions
-
-- [ ] End-to-end encryption (client-side, Signal Protocol)
-- [ ] Push notifications via FCM/APNs when user is offline
-- [ ] Message reactions (emoji responses)
-- [ ] Bot framework — a room can have bot members that respond to commands
-- [ ] Voice/video call signaling via WebRTC + Socket.IO as the signaling layer
-
----
-
-## 📄 License
-
-MIT
