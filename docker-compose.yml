@@ -1,0 +1,17 @@
+version: '3.8'
+services:
+  app:
+    build: .
+    ports: ["3000:3000"]
+    depends_on: [mongo, redis]
+    env_file: .env
+
+  mongo:
+    image: mongo:6
+    volumes: [mongodata:/data/db]
+
+  redis:
+    image: redis:7-alpine
+
+volumes:
+  mongodata:
